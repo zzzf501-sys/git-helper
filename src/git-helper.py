@@ -206,8 +206,11 @@ class GitHelper:
         else:
             self._run(['remote', 'add', name, url])
 
-    def push(self, branch='master'):
-        """推送代码到远程"""
+    def push(self):
+        """推送代码到远程（自动使用当前分支）"""
+        branch = self.get_branch()
+        if not branch or branch == 'N/A':
+            return None
         try:
             return subprocess.run(
                 ['git', '-c', 'core.quotepath=false', 'push', '-u', 'origin', branch],
@@ -220,8 +223,11 @@ class GitHelper:
         except FileNotFoundError:
             return None
 
-    def pull(self, branch='master'):
-        """拉取远程代码"""
+    def pull(self):
+        """拉取远程代码（自动使用当前分支）"""
+        branch = self.get_branch()
+        if not branch or branch == 'N/A':
+            return None
         try:
             return subprocess.run(
                 ['git', '-c', 'core.quotepath=false', 'pull', 'origin', branch],
@@ -932,14 +938,14 @@ class GitHelperApp:
         self._gitee_result.set("⬇️  正在拉取...")
         self._set_color(self._gitee_result_lbl, "⬇️  正在拉取...")
         dialog.update()
-        staged = self.git.get_staged_files()
-        if staged:
-            self.git.commit("auto commit before pull")
         r = self.git.pull()
         if r and r.returncode == 0:
             self._gitee_result.set("✅ 拉取成功")
             self._set_color(self._gitee_result_lbl, "✅ 拉取成功")
             self.refresh()
+        elif r is None:
+            self._gitee_result.set("❌ 无法获取当前分支")
+            self._set_color(self._gitee_result_lbl, "❌ 无法获取当前分支")
         else:
             err = r.stderr.strip() if r else "拉取失败"
             self._gitee_result.set("❌ 拉取失败")
@@ -951,14 +957,14 @@ class GitHelperApp:
         self._gitee_result.set("⬆️  正在推送...")
         self._set_color(self._gitee_result_lbl, "⬆️  正在推送...")
         dialog.update()
-        staged = self.git.get_staged_files()
-        if staged:
-            self.git.commit("auto commit before push")
         r = self.git.push()
         if r and r.returncode == 0:
             self._gitee_result.set("✅ 推送成功")
             self._set_color(self._gitee_result_lbl, "✅ 推送成功")
             self.refresh()
+        elif r is None:
+            self._gitee_result.set("❌ 无法获取当前分支")
+            self._set_color(self._gitee_result_lbl, "❌ 无法获取当前分支")
         else:
             err = r.stderr.strip() if r else "推送失败"
             self._gitee_result.set("❌ 推送失败")
