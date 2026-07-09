@@ -920,8 +920,6 @@ class GitHelperApp:
         ttk.Button(btn_frame, text="🔄 刷新状态",
                    command=lambda: self._gitee_refresh(dialog)).pack(side=tk.LEFT, padx=(0, 8))
 
-        ttk.Button(btn_frame, text="❌ 关闭", command=dialog.destroy).pack(side=tk.RIGHT)
-
         self._gitee_result = tk.StringVar()
         self._gitee_result_lbl = tk.Label(frame, textvariable=self._gitee_result,
                   fg='#E65100', wraplength=460, anchor=tk.W, justify=tk.LEFT)
@@ -999,23 +997,107 @@ class GitHelperApp:
             self._remote_url_var.set(current_url)
 
     def _gitee_pull(self, dialog):
-        """执行 git pull"""
-        self._gitee_result.set("⬇️  正在拉取...")
-        self._set_color(self._gitee_result_lbl, "⬇️  正在拉取...")
-        dialog.update()
-        r = self.git.pull()
-        if r and r.returncode == 0:
-            self._gitee_result.set("✅ 拉取成功")
-            self._set_color(self._gitee_result_lbl, "✅ 拉取成功")
-            self.refresh()
-        elif r is None:
+        """执行 git pull，以中文显示常见错误"""
+        branch = self.git.get_branch()
+        if not branch or branch == 'N/A':
             self._gitee_result.set("❌ 无法获取当前分支")
             self._set_color(self._gitee_result_lbl, "❌ 无法获取当前分支")
+            return
+
+        if not self.git.has_remote('origin'):
+            self._gitee_result.set("❌ 未配置远程仓库地址")
+            self._set_color(self._gitee_result_lbl, "❌ 未配置远程仓库地址")
+            return
+
+        self._gitee_result.set("⬇️  正在拉取远程更新...")
+        self._set_color(self._gitee_result_lbl, "⬇️  正在拉取...")
+        dialog.update()
+
+        r = self.git.pull()
+        if r and r.returncode == 0:
+            self._gitee_result.set("✅ 拉取成功，本地已更新")
+            self._set_color(self._gitee_result_lbl, "✅ 拉取成功")
+            self.refresh()
+            return
+
+        if r is None:
+            self._gitee_result.set("❌ Git 未安装或无法执行")
+            self._set_color(self._gitee_result_lbl, "❌ Git 未安装")
+            return
+
+        err = r.stderr.strip()
+        err_lower = err.lower()
+
+        # ── 常见错误翻译 ──
+        if 'unrelated histories' in err_lower:
+            self._gitee_result.set("⚠️  本地和远程仓库没有共同的提交历史")
+            self._set_color(self._gitee_result_lbl, "⚠️  历史不相关")
+
+            choice = messagebox.askyesno(
+                "本地和远程没有共同历史",
+                "本地仓库和远程仓库的提交历史没有关联，无法直接合并。\n"
+                "是否允许合并无关历史？\n\n"
+                "✅ [是]  合并（推荐）\n"
+                "❌ [否]  取消",
+                parent=dialog)
+
+            if choice:
+                self._gitee_result.set("⬇️  正在合并无关历史...")
+                dialog.update()
+                r2 = self.git.pull(allow_unrelated=True)
+                if r2 and r2.returncode == 0:
+                    self._gitee_result.set("✅ 拉取成功（已合并无关历史）")
+                    self._set_color(self._gitee_result_lbl, "✅ 拉取成功")
+                    self.refresh()
+                else:
+                    err2 = r2.stderr.strip() if r2 else "拉取失败"
+                    self._gitee_result.set("❌ 拉取失败")
+                    messagebox.showerror("拉取失败", err2, parent=dialog)
+
+        elif 'could not read' in err_lower or 'auth error' in err_lower \
+                or 'access denied' in err_lower:
+            self._gitee_result.set("❌ 认证失败，无权限读取远程仓库")
+            self._set_color(self._gitee_result_lbl, "❌ 认证失败")
+            remote_url = self.git.get_remote_url('origin')
+            msg = (
+                "无法读取远程仓库，可能原因：\n\n"
+                "1️⃣  远程地址不正确\n"
+                f"    当前: {remote_url}\n"
+                "    在「远程仓库地址」区修改\n\n"
+                "2️⃣  SSH 密钥未添加到 Gitee\n"
+                "    去 https://gitee.com/profile/sshkeys 检查\n\n"
+                "3️⃣  没有仓库的读取权限"
+            )
+            messagebox.showerror("认证失败", msg, parent=dialog)
+
+        elif 'merge conflict' in err_lower or 'conflict' in err_lower:
+            self._gitee_result.set("❌ 合并冲突，请手动解决后重试")
+            self._set_color(self._gitee_result_lbl, "❌ 合并冲突")
+            messagebox.showerror(
+                "合并冲突",
+                "拉取时产生合并冲突，需要手动解决：\n\n"
+                "1. 打开冲突文件（Git 会在文件中标注冲突位置）\n"
+                "2. 保留需要的代码，删除冲突标记\n"
+                "3. 保存文件\n"
+                "4. 在 Git 助手中「暂存所有」→「提交」\n\n"
+                f"详细错误：\n{err[:400]}",
+                parent=dialog)
+
+        elif 'not a git repository' in err_lower:
+            self._gitee_result.set("❌ 当前目录不是 Git 仓库")
+            self._set_color(self._gitee_result_lbl, "❌ 不是 Git 仓库")
+
+        elif 'could not resolve host' in err_lower or 'connection refused' in err_lower \
+                or '连接失败' in err:
+            self._gitee_result.set("❌ 网络连接失败，请检查网络")
+            self._set_color(self._gitee_result_lbl, "❌ 网络错误")
+            messagebox.showerror("网络错误", f"无法连接到远程仓库，请检查网络连接。\n\n{err[:300]}", parent=dialog)
+
         else:
-            err = r.stderr.strip() if r else "拉取失败"
+            short_err = err[:500] if len(err) > 500 else err
             self._gitee_result.set("❌ 拉取失败")
             self._set_color(self._gitee_result_lbl, "❌ 拉取失败")
-            messagebox.showerror("拉取失败", err, parent=dialog)
+            messagebox.showerror("拉取失败", short_err, parent=dialog)
 
     def _gitee_push(self, dialog):
         """执行 git push，遇到常见错误自动给出解决建议"""
