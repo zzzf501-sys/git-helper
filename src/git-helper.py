@@ -206,14 +206,21 @@ class GitHelper:
         else:
             self._run(['remote', 'add', name, url])
 
-    def push(self):
+    def remove_remote(self, name='origin'):
+        """删除远程仓库地址"""
+        return self._run(['remote', 'remove', name])
+
+    def push(self, force=False):
         """推送代码到远程（自动使用当前分支）"""
         branch = self.get_branch()
         if not branch or branch == 'N/A':
             return None
         try:
+            cmd = ['git', '-c', 'core.quotepath=false', 'push', '-u', 'origin', branch]
+            if force:
+                cmd.insert(2, '--force')
             return subprocess.run(
-                ['git', '-c', 'core.quotepath=false', 'push', '-u', 'origin', branch],
+                cmd,
                 cwd=self.working_dir,
                 capture_output=True,
                 text=True,
@@ -223,14 +230,17 @@ class GitHelper:
         except FileNotFoundError:
             return None
 
-    def pull(self):
+    def pull(self, allow_unrelated=False):
         """拉取远程代码（自动使用当前分支）"""
         branch = self.get_branch()
         if not branch or branch == 'N/A':
             return None
         try:
+            cmd = ['git', '-c', 'core.quotepath=false', 'pull', 'origin', branch]
+            if allow_unrelated:
+                cmd.insert(2, '--allow-unrelated-histories')
             return subprocess.run(
-                ['git', '-c', 'core.quotepath=false', 'pull', 'origin', branch],
+                cmd,
                 cwd=self.working_dir,
                 capture_output=True,
                 text=True,
@@ -818,40 +828,82 @@ class GitHelperApp:
                   fg='#888', anchor=tk.W, justify=tk.LEFT)
         self._ssh_status_lbl.pack(fill=tk.X, pady=(2, 0))
 
-        # === 没配 remote 时显示输入框 ===
+        # === 远程地址管理（始终显示） ===
         self._remote_frame = ttk.LabelFrame(frame, text="远程仓库地址 (SSH)", padding=8)
-        self._remote_url_var = tk.StringVar()
+        self._remote_frame.pack(fill=tk.X, pady=(10, 0))
+
+        entry_frame = ttk.Frame(self._remote_frame)
+        entry_frame.pack(fill=tk.X)
+
+        self._remote_url_var = tk.StringVar(value=remote_url)
+        self._remote_entry = ttk.Entry(entry_frame, textvariable=self._remote_url_var)
+        self._remote_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
         self._remote_err_var = tk.StringVar()
 
-        if not remote_url:
-            self._remote_frame.pack(fill=tk.X, pady=(10, 0))
-            ttk.Entry(self._remote_frame,
-                      textvariable=self._remote_url_var).pack(fill=tk.X)
-            ttk.Label(self._remote_frame,
-                      text="示例: git@gitee.com:用户名/仓库名.git",
-                      foreground='#888', font=('', 11)).pack(anchor=tk.W, pady=(2, 0))
-            btnf = ttk.Frame(self._remote_frame)
-            btnf.pack(fill=tk.X, pady=(5, 0))
+        hint_text = "示例: git@gitee.com:用户名/仓库名.git"
+        if remote_url:
+            hint_text = "修改地址后点击「更新」保存，或点击「删除」清空远程地址"
+        ttk.Label(self._remote_frame,
+                  text=hint_text,
+                  foreground='#888', font=('', 11)).pack(anchor=tk.W, pady=(2, 0))
 
-            def do_set_remote():
-                url = self._remote_url_var.get().strip()
-                if not url:
-                    self._remote_err_var.set("地址不能为空")
-                    return
-                # HTTPS → SSH 自动转换
-                ssh_url = self._https_to_ssh(url)
-                if ssh_url != url:
-                    self._remote_err_var.set(f"🔄 已自动转为 SSH: {ssh_url}")
-                self.git.set_remote(ssh_url, 'origin')
+        btnf = ttk.Frame(self._remote_frame)
+        btnf.pack(fill=tk.X, pady=(5, 0))
+
+        def do_set_remote():
+            url = self._remote_url_var.get().strip()
+            if not url:
+                self._remote_err_var.set("地址不能为空")
+                return
+            # HTTPS → SSH 自动转换
+            ssh_url = self._https_to_ssh(url)
+            if ssh_url != url:
+                self._remote_err_var.set(f"🔄 已自动转为 SSH: {ssh_url}")
+            self.git.set_remote(ssh_url, 'origin')
+            self._remote_err_var.set("✅ 远程地址已更新")
+            self._gitee_refresh(dialog)
+            # 更新按钮状态
+            has_remote = True
+            self._toggle_remote_btns()
+
+        def do_remove_remote():
+            ok = messagebox.askyesno(
+                "删除远程地址",
+                "确定要删除远程仓库地址吗？\n删除后需要重新设置才能推送/拉取。",
+                parent=dialog)
+            if not ok:
+                return
+            r = self.git.remove_remote('origin')
+            if r and r.returncode == 0:
+                self._remote_url_var.set('')
+                self._remote_err_var.set("✅ 远程地址已删除")
+                self._ssh_ok = False
                 self._gitee_refresh(dialog)
-                # 隐藏输入区，显示按钮
-                self._remote_frame.pack_forget()
-                self._gitee_btn_pull.config(state=tk.NORMAL if self._ssh_ok else tk.DISABLED)
-                self._gitee_btn_push.config(state=tk.NORMAL if self._ssh_ok else tk.DISABLED)
+                self._toggle_remote_btns()
+            else:
+                self._remote_err_var.set("❌ 删除失败")
 
-            ttk.Button(btnf, text="🔗 设置远程仓库", command=do_set_remote).pack(side=tk.LEFT, padx=(0, 8))
-            ttk.Label(btnf, textvariable=self._remote_err_var,
-                      foreground='green').pack(side=tk.LEFT)
+        def _toggle_remote_btns():
+            has = self.git.has_remote('origin')
+            self._set_remote_btn.config(text="🔗 更新地址" if has else "🔗 设置远程仓库")
+            self._remove_remote_btn.config(state=tk.NORMAL if has else tk.DISABLED)
+            if has:
+                state = tk.NORMAL if self._ssh_ok else tk.DISABLED
+                self._gitee_btn_pull.config(state=state)
+                self._gitee_btn_push.config(state=state)
+            else:
+                self._gitee_btn_pull.config(state=tk.DISABLED)
+                self._gitee_btn_push.config(state=tk.DISABLED)
+
+        self._set_remote_btn = ttk.Button(btnf, text="🔗 设置远程仓库", command=do_set_remote)
+        self._set_remote_btn.pack(side=tk.LEFT, padx=(0, 8))
+
+        self._remove_remote_btn = ttk.Button(btnf, text="🗑️ 删除地址", command=do_remove_remote)
+        self._remove_remote_btn.pack(side=tk.LEFT, padx=(0, 8))
+
+        ttk.Label(btnf, textvariable=self._remote_err_var,
+                  foreground='green').pack(side=tk.LEFT)
 
         # === 操作按钮 ===
         btn_frame = ttk.Frame(frame)
@@ -927,11 +979,24 @@ class GitHelperApp:
                 self._set_color(self._gitee_status_lbl, t)
 
         # 启用/禁用按钮
-        connected = ok and self.git.has_remote('origin')
+        has_remote = self.git.has_remote('origin')
+        connected = ok and has_remote
         state = tk.NORMAL if connected else tk.DISABLED
         if dialog:
             self._gitee_btn_pull.config(state=state)
             self._gitee_btn_push.config(state=state)
+
+        # 同步远程管理区按钮和输入框
+        if hasattr(self, '_set_remote_btn'):
+            self._set_remote_btn.config(
+                text="🔗 更新地址" if has_remote else "🔗 设置远程仓库")
+        if hasattr(self, '_remove_remote_btn'):
+            self._remove_remote_btn.config(
+                state=tk.NORMAL if has_remote else tk.DISABLED)
+        # 同步输入框中的地址
+        current_url = self.git.get_remote_url('origin')
+        if hasattr(self, '_remote_url_var'):
+            self._remote_url_var.set(current_url)
 
     def _gitee_pull(self, dialog):
         """执行 git pull"""
@@ -953,23 +1018,125 @@ class GitHelperApp:
             messagebox.showerror("拉取失败", err, parent=dialog)
 
     def _gitee_push(self, dialog):
-        """执行 git push"""
+        """执行 git push，遇到常见错误自动给出解决建议"""
+        branch = self.git.get_branch()
+        if not branch or branch == 'N/A':
+            self._gitee_result.set("❌ 无法获取当前分支")
+            self._set_color(self._gitee_result_lbl, "❌ 无法获取当前分支")
+            return
+
+        if not self.git.has_remote('origin'):
+            self._gitee_result.set("❌ 未配置远程仓库地址，请先在「远程仓库地址」区设置")
+            self._set_color(self._gitee_result_lbl, "❌ 未配置远程仓库地址")
+            return
+
         self._gitee_result.set("⬆️  正在推送...")
         self._set_color(self._gitee_result_lbl, "⬆️  正在推送...")
         dialog.update()
+
         r = self.git.push()
         if r and r.returncode == 0:
             self._gitee_result.set("✅ 推送成功")
             self._set_color(self._gitee_result_lbl, "✅ 推送成功")
             self.refresh()
-        elif r is None:
-            self._gitee_result.set("❌ 无法获取当前分支")
-            self._set_color(self._gitee_result_lbl, "❌ 无法获取当前分支")
+            return
+
+        if r is None:
+            self._gitee_result.set("❌ Git 未安装或无法执行")
+            self._set_color(self._gitee_result_lbl, "❌ Git 未安装")
+            return
+
+        err = r.stderr.strip()
+        err_lower = err.lower()
+
+        # ── 情况 1：没有共同历史（unrelated histories） ──
+        if 'unrelated histories' in err_lower or 'fetch first' in err_lower:
+            self._gitee_result.set("⚠️  远程仓库包含本地没有的提交")
+            self._set_color(self._gitee_result_lbl, "⚠️  需要先同步远程")
+
+            choice = messagebox.askyesnocancel(
+                "远程有本地没有的提交",
+                "远程仓库包含本地没有的内容。\n\n"
+                "🔄 [是]    先拉取再推送（推荐）\n"
+                "   - 远程已有的内容会合并到本地\n"
+                "   - 不会丢失任何代码\n"
+                "💪 [否]    强制覆盖远程\n"
+                "   - 用本地内容替换远程\n"
+                "   - 远程原有的提交会丢失\n"
+                "❌ [取消]  什么都不做",
+                parent=dialog)
+
+            if choice is True:  # 拉取再推送
+                self._gitee_result.set("⬇️  正在拉取远程内容...")
+                self._set_color(self._gitee_result_lbl, "⬇️  正在拉取...")
+                dialog.update()
+
+                use_unrelated = 'unrelated histories' in err_lower
+                pull_r = self.git.pull(allow_unrelated=use_unrelated)
+                if pull_r and pull_r.returncode == 0:
+                    self._gitee_result.set("⬆️  拉取完成，正在重新推送...")
+                    dialog.update()
+                    push2 = self.git.push()
+                    if push2 and push2.returncode == 0:
+                        self._gitee_result.set("✅ 推送成功（已自动拉取并合并）")
+                        self._set_color(self._gitee_result_lbl, "✅ 推送成功")
+                        self.refresh()
+                    else:
+                        err2 = push2.stderr.strip() if push2 else "推送失败"
+                        self._gitee_result.set("❌ 拉取后推送仍失败")
+                        messagebox.showerror("推送失败", err2, parent=dialog)
+                else:
+                    pull_err = pull_r.stderr.strip() if pull_r else "拉取失败"
+                    self._gitee_result.set("❌ 拉取失败")
+                    messagebox.showerror("拉取失败", pull_err, parent=dialog)
+
+            elif choice is False:  # 强制推送
+                ok = messagebox.askyesno(
+                    "确认强制推送",
+                    "⚠️  强制推送会覆盖远程仓库的内容！\n\n"
+                    f"远程分支: origin/{branch}\n"
+                    "确定要继续吗？",
+                    icon='warning', parent=dialog)
+                if ok:
+                    self._gitee_result.set("💪  正在强制推送...")
+                    dialog.update()
+                    force_r = self.git.push(force=True)
+                    if force_r and force_r.returncode == 0:
+                        self._gitee_result.set("✅ 强制推送成功")
+                        self._set_color(self._gitee_result_lbl, "✅ 强制推送成功")
+                        self.refresh()
+                    else:
+                        err_f = force_r.stderr.strip() if force_r else "强制推送失败"
+                        self._gitee_result.set("❌ 强制推送失败")
+                        messagebox.showerror("强制推送失败", err_f, parent=dialog)
+
+        # ── 情况 2：认证错误（SSH / 权限） ──
+        elif 'auth error' in err_lower or 'access denied' in err_lower \
+                or 'permission denied' in err_lower or 'could not read' in err_lower:
+            self._gitee_result.set("❌ SSH 认证失败，请检查远程地址和 SSH 密钥")
+            self._set_color(self._gitee_result_lbl, "❌ 认证失败")
+
+            remote_url = self.git.get_remote_url('origin')
+            msg = (
+                "SSH 认证失败，可能原因：\n\n"
+                "1️⃣  远程地址不正确\n"
+                f"    当前: {remote_url}\n"
+                "    修改：在「远程仓库地址」区填入正确的 SSH 地址\n\n"
+                "2️⃣  SSH 密钥未添加到 Gitee\n"
+                "    去 https://gitee.com/profile/sshkeys 检查\n\n"
+                "3️⃣  密钥未加载到 ssh-agent\n"
+                "    在终端执行: ssh-add ~/.ssh/id_ed25519\n\n"
+                "4️⃣  没有仓库的写入权限"
+            )
+            messagebox.showerror("认证失败", msg, parent=dialog)
+
+        # ── 情况 3：其他错误 ──
         else:
-            err = r.stderr.strip() if r else "推送失败"
             self._gitee_result.set("❌ 推送失败")
             self._set_color(self._gitee_result_lbl, "❌ 推送失败")
-            messagebox.showerror("推送失败", err, parent=dialog)
+            # 截断过长的错误消息
+            short_err = err[:600] if len(err) > 600 else err
+            messagebox.showerror("推送失败", short_err, parent=dialog)
 
 
 # ──────────────────────────────────────────────

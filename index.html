@@ -1,0 +1,767 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Git 助手 — 可视化 Git 工具</title>
+  <style>
+    /* ===== 重置 & 基础 ===== */
+    *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+        "Helvetica Neue", Arial, "Noto Sans SC", "Microsoft YaHei", sans-serif;
+      color: #1a1a2e;
+      background: #f8f9fc;
+      line-height: 1.7;
+      overflow-x: hidden;
+    }
+
+    a { color: #667eea; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
+    /* ===== 导航栏 ===== */
+    .navbar {
+      position: fixed;
+      top: 0; left: 0; right: 0;
+      height: 64px;
+      background: rgba(255,255,255,0.85);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      border-bottom: 1px solid rgba(102,126,234,0.10);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 2rem;
+      z-index: 100;
+    }
+
+    .navbar .logo {
+      font-weight: 700;
+      font-size: 1.15rem;
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+      color: #1a1a2e;
+      text-decoration: none;
+    }
+    .navbar .logo:hover { text-decoration: none; }
+    .navbar .logo span { color: #667eea; }
+
+    .nav-links { display: flex; gap: 1.5rem; list-style: none; }
+    .nav-links a {
+      font-size: 0.9rem;
+      font-weight: 500;
+      color: #555;
+      transition: color 0.2s;
+    }
+    .nav-links a:hover { color: #667eea; text-decoration: none; }
+
+    /* ===== Hero ===== */
+    .hero {
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      text-align: center;
+      padding: 6rem 2rem 4rem;
+      background: linear-gradient(135deg, #0f0c29 0%, #302b63 50%, #24243e 100%);
+      color: #fff;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .hero::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background:
+        radial-gradient(ellipse at 20% 50%, rgba(102,126,234,0.20) 0%, transparent 60%),
+        radial-gradient(ellipse at 80% 20%, rgba(118,75,162,0.20) 0%, transparent 60%);
+      pointer-events: none;
+    }
+
+    .hero-badge {
+      display: inline-block;
+      background: rgba(255,255,255,0.08);
+      border: 1px solid rgba(255,255,255,0.12);
+      border-radius: 30px;
+      padding: 0.3rem 1rem;
+      font-size: 0.82rem;
+      font-weight: 600;
+      letter-spacing: 0.5px;
+      color: rgba(255,255,255,0.7);
+      margin-bottom: 1.5rem;
+      backdrop-filter: blur(4px);
+    }
+
+    .hero h1 {
+      font-size: clamp(2.5rem, 6vw, 4.2rem);
+      font-weight: 800;
+      line-height: 1.15;
+      margin-bottom: 1rem;
+      background: linear-gradient(135deg, #fff 40%, #a0a8ff 100%);
+      -webkit-background-clip: text;
+      background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .hero p {
+      font-size: 1.2rem;
+      color: rgba(255,255,255,0.65);
+      max-width: 600px;
+      margin-bottom: 2rem;
+    }
+
+    .hero-buttons {
+      display: flex;
+      gap: 0.8rem;
+      flex-wrap: wrap;
+      justify-content: center;
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      padding: 0.75rem 1.6rem;
+      border-radius: 12px;
+      font-weight: 600;
+      font-size: 0.95rem;
+      transition: all 0.25s ease;
+      border: none;
+      cursor: pointer;
+      text-decoration: none;
+    }
+    .btn:hover { text-decoration: none; transform: translateY(-2px); }
+
+    .btn-primary {
+      background: #667eea;
+      color: #fff;
+      box-shadow: 0 4px 20px rgba(102,126,234,0.35);
+    }
+    .btn-primary:hover { background: #5a6fd6; box-shadow: 0 6px 28px rgba(102,126,234,0.45); }
+
+    .btn-outline {
+      background: transparent;
+      color: #fff;
+      border: 1.5px solid rgba(255,255,255,0.25);
+    }
+    .btn-outline:hover { border-color: #667eea; background: rgba(102,126,234,0.12); }
+
+    /* ===== Section 通用 ===== */
+    section { padding: 5rem 2rem; }
+    .section-inner {
+      max-width: 1100px;
+      margin: 0 auto;
+    }
+
+    .section-label {
+      display: inline-block;
+      font-size: 0.8rem;
+      font-weight: 700;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      color: #667eea;
+      margin-bottom: 0.5rem;
+    }
+
+    .section-title {
+      font-size: clamp(1.8rem, 3.5vw, 2.6rem);
+      font-weight: 700;
+      margin-bottom: 1rem;
+    }
+
+    .section-desc {
+      font-size: 1.05rem;
+      color: #666;
+      max-width: 600px;
+      margin-bottom: 3rem;
+    }
+
+    /* ===== 产品截图 ===== */
+    .screenshot-section {
+      background: #fff;
+      text-align: center;
+    }
+
+    .screenshot-wrapper {
+      position: relative;
+      max-width: 900px;
+      margin: 0 auto;
+      border-radius: 16px;
+      overflow: hidden;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.10);
+    }
+
+    .screenshot-wrapper img {
+      width: 100%;
+      display: block;
+    }
+
+    /* 用纯 CSS 模拟一个界面截图 */
+    .mock-screen {
+      background: #fff;
+      border-radius: 16px;
+      overflow: hidden;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.10);
+      text-align: left;
+      font-size: 0.85rem;
+    }
+
+    .mock-screen-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 14px 18px;
+      background: #f0f2f5;
+      border-bottom: 1px solid #e4e7ed;
+    }
+    .mock-screen-header .dot {
+      width: 12px; height: 12px;
+      border-radius: 50%;
+    }
+    .mock-screen-header .dot:nth-child(1) { background: #ff5f57; }
+    .mock-screen-header .dot:nth-child(2) { background: #ffbd2e; }
+    .mock-screen-header .dot:nth-child(3) { background: #28c840; }
+    .mock-screen-header .title-text {
+      margin-left: auto;
+      font-size: 0.8rem;
+      color: #888;
+      font-weight: 500;
+    }
+
+    .mock-screen-body {
+      padding: 0;
+    }
+
+    .mock-toolbar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 16px;
+      background: #f7f8fa;
+      border-bottom: 1px solid #e4e7ed;
+    }
+
+    .mock-toolbar .path-input {
+      flex: 1;
+      padding: 6px 12px;
+      background: #fff;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      font-size: 0.8rem;
+      color: #333;
+    }
+
+    .mock-toolbar .btn-sm {
+      padding: 5px 12px;
+      background: #eef0f4;
+      border-radius: 6px;
+      font-size: 0.75rem;
+      font-weight: 600;
+      color: #555;
+    }
+
+    .mock-panes {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      min-height: 320px;
+    }
+
+    .mock-pane {
+      border-right: 1px solid #e4e7ed;
+      padding: 10px 14px;
+    }
+    .mock-pane:last-child { border-right: none; }
+
+    .mock-pane-title {
+      font-size: 0.75rem;
+      font-weight: 700;
+      color: #999;
+      letter-spacing: 0.5px;
+      margin-bottom: 8px;
+      padding-bottom: 6px;
+      border-bottom: 1px solid #eef0f4;
+    }
+
+    .mock-file { padding: 3px 0; font-size: 0.82rem; cursor: default; }
+    .mock-file .tag {
+      display: inline-block;
+      font-size: 0.65rem;
+      font-weight: 600;
+      padding: 0 6px;
+      border-radius: 4px;
+      margin-left: 6px;
+    }
+
+    .mock-file .tag.modified  { background: #fff3e0; color: #E65100; }
+    .mock-file .tag.untracked { background: #e8f5e9; color: #2E7D32; }
+    .mock-file .tag.staged    { background: #e3f2fd; color: #1565C0; }
+    .mock-file .tag.folder    { background: #f3e8ff; color: #7c3aed; }
+
+    .mock-status-bar {
+      display: flex;
+      align-items: center;
+      padding: 6px 14px;
+      background: #f0f2f5;
+      border-top: 1px solid #e4e7ed;
+      font-size: 0.75rem;
+      color: #888;
+    }
+
+    @media (max-width: 720px) {
+      .mock-panes { grid-template-columns: 1fr; }
+      .mock-pane { border-right: none; border-bottom: 1px solid #e4e7ed; }
+      .mock-pane:last-child { border-bottom: none; }
+    }
+
+    /* ===== 特性网格 ===== */
+    .features-section { background: #fff; }
+
+    .features-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+      gap: 1.5rem;
+    }
+
+    .feature-card {
+      background: #f8f9fc;
+      border: 1px solid #eaeef5;
+      border-radius: 16px;
+      padding: 1.8rem 1.5rem;
+      transition: all 0.3s ease;
+    }
+    .feature-card:hover {
+      border-color: #667eea;
+      transform: translateY(-4px);
+      box-shadow: 0 12px 36px rgba(102,126,234,0.10);
+    }
+
+    .feature-icon {
+      font-size: 2rem;
+      margin-bottom: 0.75rem;
+    }
+
+    .feature-card h3 {
+      font-size: 1.05rem;
+      font-weight: 700;
+      margin-bottom: 0.5rem;
+    }
+
+    .feature-card p {
+      font-size: 0.9rem;
+      color: #666;
+    }
+
+    /* ===== 三区架构 ===== */
+    .architecture-section { background: #f8f9fc; }
+
+    .arch-flow {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 1rem;
+      flex-wrap: wrap;
+      margin-bottom: 2.5rem;
+    }
+
+    .arch-step {
+      background: #fff;
+      border: 1px solid #e4e7ed;
+      border-radius: 14px;
+      padding: 1.2rem 1.8rem;
+      text-align: center;
+      min-width: 140px;
+      transition: all 0.3s;
+    }
+    .arch-step:hover {
+      border-color: #667eea;
+      box-shadow: 0 4px 16px rgba(102,126,234,0.12);
+    }
+    .arch-step .emoji { font-size: 1.8rem; display: block; margin-bottom: 0.3rem; }
+    .arch-step .label { font-weight: 600; font-size: 0.95rem; }
+    .arch-step .desc  { font-size: 0.78rem; color: #999; margin-top: 0.15rem; }
+
+    .arch-arrow {
+      font-size: 1.5rem;
+      color: #ccc;
+    }
+
+    @media (max-width: 640px) {
+      .arch-flow { flex-direction: column; }
+      .arch-arrow { transform: rotate(90deg); }
+    }
+
+    /* ===== 快速开始 ===== */
+    .start-section {
+      background: linear-gradient(135deg, #0f0c29 0%, #302b63 50%, #24243e 100%);
+      color: #fff;
+      text-align: center;
+    }
+
+    .start-section .section-desc { color: rgba(255,255,255,0.6); }
+
+    .steps {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+      gap: 1.5rem;
+      margin-bottom: 2.5rem;
+      text-align: left;
+    }
+
+    .step-card {
+      background: rgba(255,255,255,0.06);
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 14px;
+      padding: 1.5rem;
+      backdrop-filter: blur(4px);
+    }
+
+    .step-number {
+      width: 36px; height: 36px;
+      background: rgba(102,126,234,0.25);
+      border-radius: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 800;
+      font-size: 1rem;
+      color: #667eea;
+      margin-bottom: 0.8rem;
+    }
+
+    .step-card h4 {
+      font-size: 1rem;
+      font-weight: 600;
+      margin-bottom: 0.4rem;
+    }
+
+    .step-card p {
+      font-size: 0.85rem;
+      color: rgba(255,255,255,0.55);
+    }
+
+    /* ===== 环境要求 ===== */
+    .req-section { background: #fff; }
+
+    .req-list {
+      display: flex;
+      gap: 2rem;
+      flex-wrap: wrap;
+    }
+
+    .req-item {
+      flex: 1;
+      min-width: 200px;
+      background: #f8f9fc;
+      border: 1px solid #eaeef5;
+      border-radius: 14px;
+      padding: 1.5rem;
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+    }
+
+    .req-icon {
+      font-size: 2rem;
+      flex-shrink: 0;
+    }
+
+    .req-info h4 { font-size: 1rem; margin-bottom: 0.2rem; }
+    .req-info p  { font-size: 0.85rem; color: #888; }
+
+    /* ===== 页脚 ===== */
+    footer {
+      text-align: center;
+      padding: 2.5rem 2rem;
+      background: #0f0c29;
+      color: rgba(255,255,255,0.4);
+      font-size: 0.85rem;
+    }
+    footer a { color: rgba(255,255,255,0.6); }
+
+    /* ===== 回到顶部 ===== */
+    .back-top {
+      position: fixed;
+      bottom: 2rem;
+      right: 2rem;
+      width: 44px; height: 44px;
+      background: #667eea;
+      color: #fff;
+      border: none;
+      border-radius: 12px;
+      font-size: 1.2rem;
+      cursor: pointer;
+      box-shadow: 0 4px 16px rgba(102,126,234,0.30);
+      transition: all 0.25s ease;
+      opacity: 0;
+      pointer-events: none;
+    }
+    .back-top.visible { opacity: 1; pointer-events: auto; }
+    .back-top:hover { transform: translateY(-3px); box-shadow: 0 6px 24px rgba(102,126,234,0.45); }
+  </style>
+</head>
+<body>
+
+  <!-- ==================== 导航栏 ==================== -->
+  <nav class="navbar">
+    <a href="#" class="logo"><span>◆</span> Git 助手</a>
+    <ul class="nav-links">
+      <li><a href="#features">特性</a></li>
+      <li><a href="#architecture">架构</a></li>
+      <li><a href="#start">快速开始</a></li>
+      <li><a href="#requirements">环境</a></li>
+    </ul>
+  </nav>
+
+  <!-- ==================== Hero ==================== -->
+  <header class="hero" id="top">
+    <div class="hero-badge">⚡ 纯 Python · 开箱即用</div>
+    <h1>Git 助手</h1>
+    <p>一个开箱即用的可视化 Git 工具 —— 通过图形界面完成日常 Git 操作，无需记忆繁琐的命令。</p>
+    <div class="hero-buttons">
+      <a href="#start" class="btn btn-primary">🚀 快速开始</a>
+      <a href="https://github.com" class="btn btn-outline" target="_blank">📂 GitHub</a>
+    </div>
+  </header>
+
+  <!-- ==================== 截图 ==================== -->
+  <section class="screenshot-section">
+    <div class="section-inner">
+      <div class="section-label">产品预览</div>
+      <h2 class="section-title">一目了然</h2>
+      <p class="section-desc" style="margin:0 auto 3rem;">工作区 · 暂存区 · 提交历史，三区并排展示，状态颜色一目了然。</p>
+
+      <div class="mock-screen">
+        <div class="mock-screen-header">
+          <span class="dot"></span>
+          <span class="dot"></span>
+          <span class="dot"></span>
+          <span class="title-text">Git 助手</span>
+        </div>
+        <div class="mock-screen-body">
+          <div class="mock-toolbar">
+            <span style="font-size:0.8rem;color:#888;">📂 路径:</span>
+            <span class="path-input">C:\Users\MyProject</span>
+            <span class="btn-sm">前往</span>
+            <span class="btn-sm">浏览</span>
+          </div>
+          <div class="mock-panes">
+            <div class="mock-pane">
+              <div class="mock-pane-title">📝 工作区</div>
+              <div class="mock-file">📁 src/ <span class="tag folder">文件夹</span></div>
+              <div class="mock-file" style="padding-left:1rem;">📄 main.py <span class="tag modified">已修改</span></div>
+              <div class="mock-file" style="padding-left:1rem;">📄 utils.py <span class="tag staged">已暂存</span></div>
+              <div class="mock-file">📄 README.md <span class="tag untracked">未跟踪</span></div>
+              <div class="mock-file">📁 __pycache__/</div>
+              <div class="mock-file" style="padding-left:1rem;">📄 .gitkeep</div>
+            </div>
+            <div class="mock-pane">
+              <div class="mock-pane-title">📦 暂存区</div>
+              <div class="mock-file">📄 src/utils.py</div>
+              <div class="mock-file">📄 .gitignore</div>
+            </div>
+            <div class="mock-pane">
+              <div class="mock-pane-title">✅ 已提价</div>
+              <div class="mock-file" style="display:flex;gap:8px;">
+                <span style="color:#999;font-family:monospace;">a1b2c3d</span>
+                <span>feat: 添加用户登录功能</span>
+              </div>
+              <div class="mock-file" style="display:flex;gap:8px;">
+                <span style="color:#999;font-family:monospace;">d4e5f6g</span>
+                <span>fix: 修复内存泄漏</span>
+              </div>
+              <div class="mock-file" style="display:flex;gap:8px;">
+                <span style="color:#999;font-family:monospace;">g7h8i9j</span>
+                <span>docs: 更新 README</span>
+              </div>
+            </div>
+          </div>
+          <div class="mock-status-bar">
+            🌿 main &nbsp;·&nbsp; 📝 已修改 1 &nbsp;·&nbsp; 📦 已暂存 2 &nbsp;·&nbsp; ✅ 3 次提交
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ==================== 特性 ==================== -->
+  <section class="features-section" id="features">
+    <div class="section-inner">
+      <div class="section-label">核心特性</div>
+      <h2 class="section-title">让 Git 如此简单</h2>
+      <p class="section-desc">不用再背命令 —— 所有操作都通过直观的图形界面完成。</p>
+
+      <div class="features-grid">
+        <div class="feature-card">
+          <div class="feature-icon">📂</div>
+          <h3>工作区目录树</h3>
+          <p>以树形结构展示所有文件及其 Git 状态，不同颜色标识已修改、未跟踪、已暂存、忽略等状态。展开或收起子目录，一目了然。</p>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon">📥</div>
+          <h3>双击暂存</h3>
+          <p>在工和区双击文件即可暂存，双击暂存区的文件又可取消暂存。一键「暂存所有」或「取消暂存」，流畅高效。</p>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon">💾</div>
+          <h3>一键提交</h3>
+          <p>填写提交说明，点击提交即可创建快照。提交历史清䘏展示，支持按版本一键恢复工作区文件。</p>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon">🆕</div>
+          <h3>新建 Git 仓库</h3>
+          <p>在非 Git 仓库目录下自动提��一键初始化。再也不需要在命令行敲 <code>git init</code>。</p>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon">🌐</div>
+          <h3>Gitee 远程管理</h3>
+          <p>集成远程仓库管理，支持设置 SSH 地址、拉取（Pull）和推送（Push）。HTTPS 地址自动转为 SSH 格式，SSH 连接一键检测。</p>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon">🔍</div>
+          <h3>Git 状态全量化</h3>
+          <p>准确识别 tracked / modified / staged / untracked / ignored 五种状态，支持 <code>.gitignore</code> 规则，忽略的目录不会展开。</p>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon">📖</div>
+          <h3>内置新手教程</h3>
+          <p>附带完整的 Git 入门教程，从安装配置到分支管理、远程协作、撤销回滚，手把手带你成为 Git 高手。</p>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon">🎯</div>
+          <h3>零配置启动</h3>
+          <p>双击 <code>run.bat</code> 即可运行，自动检测 Python 环境。未安装 Python？启动脚本会自动引导安装。</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ==================== 三区架构 ==================== -->
+  <section class="architecture-section" id="architecture">
+    <div class="section-inner">
+      <div class="section-label">核心架构</div>
+      <h2 class="section-title">三区工作流</h2>
+      <p class="section-desc">遵循 Git 经典的三区架构设计，让版本管理变得直观自然。</p>
+
+      <div class="arch-flow">
+        <div class="arch-step">
+          <span class="emoji">📝</span>
+          <span class="label">工作区</span>
+          <span class="desc">编辑文件的地方</span>
+        </div>
+        <span class="arch-arrow">→</span>
+        <div class="arch-step">
+          <span class="emoji">📦</span>
+          <span class="label">暂存区</span>
+          <span class="desc">挑选要保存的内容</span>
+        </div>
+        <span class="arch-arrow">→</span>
+        <div class="arch-step">
+          <span class="emoji">✅</span>
+          <span class="label">版本历史</span>
+          <span class="desc">保存时间胶囊</span>
+        </div>
+      </div>
+
+      <p style="text-align:center;color:#888;font-size:0.9rem;max-width:600px;margin:0 auto;">
+        双击文件 → 进入暂存区 → 填写说明 → 提交保存。<br>
+        双击暂存区文件可取消暂存，选中历史版本可一键恢复。
+      </p>
+    </div>
+  </section>
+
+  <!-- ==================== 快速开始 ==================== -->
+  <section class="start-section" id="start">
+    <div class="section-inner">
+      <div class="section-label" style="color:rgba(255,255,255,0.5);">快速开始</div>
+      <h2 class="section-title">30 秒上手</h2>
+      <p class="section-desc">不需要安装任何额外依赖，双击就能用。</p>
+
+      <div class="steps">
+        <div class="step-card">
+          <div class="step-number">1</div>
+          <h4>📥 下载项目</h4>
+          <p>克隆或下载 Git 助手到本地任意文件夹。</p>
+        </div>
+        <div class="step-card">
+          <div class="step-number">2</div>
+          <h4>🚀 双击运行</h4>
+          <p>双击 <code>run.bat</code>，脚本会自动检测 Python 环境并启动。</p>
+        </div>
+        <div class="step-card">
+          <div class="step-number">3</div>
+          <h4>📂 输入路径</h4>
+          <p>在地址栏粘贴你的项目路径，按回车进入。</p>
+        </div>
+        <div class="step-card">
+          <div class="step-number">4</div>
+          <h4>🎉 开始使用</h4>
+          <p>双击暂存、填写说明、提交保存，像游戏存档一样管理代码！</p>
+        </div>
+      </div>
+
+      <div style="background:rgba(255,255,255,0.06);border-radius:12px;padding:1rem 1.5rem;display:inline-block;border:1px solid rgba(255,255,255,0.08);">
+        <code style="font-size:0.9rem;color:rgba(255,255,255,0.7);">
+          git-helper/<br>
+          ├── run.bat&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;← 双击启动<br>
+          ├── src/git-helper.py&nbsp;&nbsp;← 主程序<br>
+          └── src/git-tutorial.md&nbsp;← 新手教程
+        </code>
+      </div>
+    </div>
+  </section>
+
+  <!-- ==================== 环境要求 ==================== -->
+  <section class="req-section" id="requirements">
+    <div class="section-inner">
+      <div class="section-label">环境要求</div>
+      <h2 class="section-title">需要什么？</h2>
+      <p class="section-desc">只需要两个基础环境，且 Python 可由启动脚本自动安装。</p>
+
+      <div class="req-list">
+        <div class="req-item">
+          <div class="req-icon">🐍</div>
+          <div class="req-info">
+            <h4>Python 3.8+</h4>
+            <p>Tkinter 内置，无需 pip 安装。未检测到时自动引导安装。</p>
+          </div>
+        </div>
+        <div class="req-item">
+          <div class="req-icon">🔀</div>
+          <div class="req-info">
+            <h4>Git</h4>
+            <p>操作 Git 仓库必需。建议使用最新版本。</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ==================== 页脚 ==================== -->
+  <footer>
+    <p>Git 助手 &nbsp;·&nbsp; 以图形界面简化版本管理</p>
+    <p style="margin-top:0.3rem;">用 ❤️ 和 Python 编写</p>
+  </footer>
+
+  <!-- ==================== 回到顶部 ==================== -->
+  <button class="back-top" id="backTop" onclick="window.scrollTo({top:0,behavior:'smooth'})">↑</button>
+
+  <script>
+    // 回到顶部按钮显隐
+    window.addEventListener('scroll', () => {
+      document.getElementById('backTop').classList.toggle('visible', window.scrollY > 300);
+    });
+  </script>
+</body>
+</html>
