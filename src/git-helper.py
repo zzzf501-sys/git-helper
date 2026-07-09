@@ -9,6 +9,7 @@ Git 助手 — 可视化 Git 工具
 """
 
 import os
+import re
 import subprocess
 import tkinter as tk
 import tkinter.font as tkfont
@@ -738,6 +739,16 @@ class GitHelperApp:
 
     # ── Gitee 仓库管理 ──
 
+    @staticmethod
+    def _https_to_ssh(url):
+        """将 HTTPS 远程地址自动转为 SSH 格式"""
+        # 匹配 https://HOST/USER/REPO 或 https://HOST/USER/REPO.git
+        m = re.match(r'https://([^/]+)/([^/]+)/([^/]+?)(\.git)?/?$', url)
+        if m:
+            host, user, repo, _ = m.groups()
+            return f'git@{host}:{user}/{repo}.git'
+        return url  # 不是 HTTPS 格式则原样返回
+
     def _check_ssh_connection(self, host='git@gitee.com'):
         """测试 SSH 能否连接到 Gitee，返回 (成功?, 消息)"""
         try:
@@ -777,8 +788,9 @@ class GitHelperApp:
         status_frame.pack(fill=tk.X)
 
         self._gitee_status = tk.StringVar(value="检查中...")
-        ttk.Label(status_frame, textvariable=self._gitee_status,
-                  font=('Microsoft YaHei UI', 13)).pack(anchor=tk.W)
+        self._gitee_status_lbl = tk.Label(status_frame, textvariable=self._gitee_status,
+                  font=('Microsoft YaHei UI', 13), anchor=tk.W, justify=tk.LEFT)
+        self._gitee_status_lbl.pack(fill=tk.X)
 
         ttk.Label(status_frame,
                   text=f"分支: {self.git.get_branch()}",
@@ -786,13 +798,19 @@ class GitHelperApp:
 
         remote_url = self.git.get_remote_url('origin')
         if remote_url:
+            # HTTPS → SSH 自动转换
+            ssh_url = self._https_to_ssh(remote_url)
+            if ssh_url != remote_url:
+                self.git.set_remote(ssh_url, 'origin')
+                remote_url = ssh_url
             ttk.Label(status_frame,
                       text=f"远程: {remote_url}",
                       foreground='#555', wraplength=460).pack(anchor=tk.W, pady=(2, 0))
 
         self._ssh_status_var = tk.StringVar()
-        ttk.Label(status_frame, textvariable=self._ssh_status_var,
-                  foreground='#888').pack(anchor=tk.W, pady=(2, 0))
+        self._ssh_status_lbl = tk.Label(status_frame, textvariable=self._ssh_status_var,
+                  fg='#888', anchor=tk.W, justify=tk.LEFT)
+        self._ssh_status_lbl.pack(fill=tk.X, pady=(2, 0))
 
         # === 没配 remote 时显示输入框 ===
         self._remote_frame = ttk.LabelFrame(frame, text="远程仓库地址 (SSH)", padding=8)
@@ -814,8 +832,11 @@ class GitHelperApp:
                 if not url:
                     self._remote_err_var.set("地址不能为空")
                     return
-                self.git.set_remote(url, 'origin')
-                self._remote_err_var.set("✅ 已设置")
+                # HTTPS → SSH 自动转换
+                ssh_url = self._https_to_ssh(url)
+                if ssh_url != url:
+                    self._remote_err_var.set(f"🔄 已自动转为 SSH: {ssh_url}")
+                self.git.set_remote(ssh_url, 'origin')
                 self._gitee_refresh(dialog)
                 # 隐藏输入区，显示按钮
                 self._remote_frame.pack_forget()
@@ -844,8 +865,9 @@ class GitHelperApp:
         ttk.Button(btn_frame, text="❌ 关闭", command=dialog.destroy).pack(side=tk.RIGHT)
 
         self._gitee_result = tk.StringVar()
-        ttk.Label(frame, textvariable=self._gitee_result,
-                  foreground='#E65100', wraplength=460).pack(anchor=tk.W, pady=(8, 0))
+        self._gitee_result_lbl = tk.Label(frame, textvariable=self._gitee_result,
+                  fg='#E65100', wraplength=460, anchor=tk.W, justify=tk.LEFT)
+        self._gitee_result_lbl.pack(fill=tk.X, pady=(8, 0))
 
         # 检查 SSH 连接
         self._gitee_refresh(dialog)
