@@ -9,10 +9,7 @@ Git 助手 — 可视化 Git 工具
 """
 
 import os
-import json
 import subprocess
-import urllib.request
-import urllib.parse
 import tkinter as tk
 import tkinter.font as tkfont
 from tkinter import ttk, filedialog, messagebox
@@ -222,6 +219,20 @@ class GitHelper:
         except FileNotFoundError:
             return None
 
+    def pull(self, branch='master'):
+        """拉取远程代码"""
+        try:
+            return subprocess.run(
+                ['git', '-c', 'core.quotepath=false', 'pull', 'origin', branch],
+                cwd=self.working_dir,
+                capture_output=True,
+                text=True,
+                encoding='utf-8',
+                errors='replace',
+            )
+        except FileNotFoundError:
+            return None
+
 
 # ──────────────────────────────────────────────
 # GUI 应用
@@ -347,7 +358,7 @@ class GitHelperApp:
         ttk.Button(btn_row, text="💾 提交", command=self._commit).pack(side=tk.LEFT, padx=(0, 5))
         ttk.Button(btn_row, text="⏪ 恢复到选中版本", command=self._restore).pack(side=tk.LEFT, padx=(0, 5))
         ttk.Separator(btn_row, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=8, pady=2)
-        ttk.Button(btn_row, text="☁️  上传到 Gitee", command=self._upload_gitee).pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Button(btn_row, text="🌐  Gitee", command=self._gitee_dialog).pack(side=tk.LEFT, padx=(0, 5))
         ttk.Button(btn_row, text="🔄 刷新", command=self.refresh).pack(side=tk.LEFT)
 
         # ========== 状态栏 ==========
@@ -725,202 +736,184 @@ class GitHelperApp:
             err = r.stderr.strip() if r else "Git 未安装"
             messagebox.showerror("初始化失败", err)
 
-    # ── Gitee 上传 ──
+    # ── Gitee 仓库管理 ──
 
-    @staticmethod
-    def _gitee_config_path():
-        return os.path.join(os.path.expanduser('~'), '.git-helper-gitee.json')
-
-    def _load_gitee_config(self):
-        """加载 Gitee 全局配置（用户名 + 令牌）"""
-        path = self._gitee_config_path()
-        if os.path.exists(path):
-            try:
-                with open(path, 'r', encoding='utf-8') as f:
-                    return json.load(f)
-            except Exception:
-                pass
-        return {}
-
-    def _save_gitee_config(self, username, token):
-        path = self._gitee_config_path()
-        with open(path, 'w', encoding='utf-8') as f:
-            json.dump({'username': username, 'token': token}, f)
-        # 只有本用户可读写
+    def _check_ssh_connection(self, host='git@gitee.com'):
+        """测试 SSH 能否连接到 Gitee，返回 (成功?, 消息)"""
         try:
-            import stat
-            os.chmod(path, stat.S_IRUSR | stat.S_IWUSR)
-        except Exception:
-            pass
-
-    def _call_gitee_api(self, method, path, token, data=None):
-        """调用 Gitee API v5，返回 (成功?, 数据或错误消息)"""
-        import urllib.error
-        url = f'https://gitee.com/api/v5{path}'
-        if method == 'GET':
-            url += f'?access_token={token}'
-            req = urllib.request.Request(url)
-        else:
-            url += f'?access_token={token}'
-            body = json.dumps(data).encode('utf-8') if data else b''
-            req = urllib.request.Request(url, data=body, method=method)
-            req.add_header('Content-Type', 'application/json')
-
-        try:
-            with urllib.request.urlopen(req, timeout=15) as resp:
-                return True, json.loads(resp.read().decode('utf-8'))
-        except urllib.error.HTTPError as e:
-            try:
-                err = json.loads(e.read().decode('utf-8'))
-                msg = err.get('message', str(e))
-            except Exception:
-                msg = str(e)
-            return False, msg
+            r = subprocess.run(
+                ['ssh', '-T', '-o', 'ConnectTimeout=5',
+                 '-o', 'BatchMode=yes', '-o', 'PasswordAuthentication=no', host],
+                capture_output=True, text=True, timeout=10)
+            # Gitee: auth 成功时 exit code=1（拒绝 shell），失败时 exit code=255
+            output = (r.stderr or r.stdout or '').strip()
+            if r.returncode != 255:
+                return True, output if output else '已连接'
+            return False, output if output else '认证失败'
+        except FileNotFoundError:
+            return False, "未找到 SSH 客户端"
+        except subprocess.TimeoutExpired:
+            return False, "连接超时"
         except Exception as e:
             return False, str(e)
 
-    def _show_gitee_dialog(self):
-        """弹出 Gitee 配置对话框"""
+    def _gitee_dialog(self):
+        """打开 Gitee 仓库管理对话框"""
+        if not self._check_repo():
+            return
+
         dialog = tk.Toplevel(self.root)
-        dialog.title("上传到 Gitee")
-        dialog.geometry("520x430")
-        dialog.resizable(False, False)
+        dialog.title("🌐 Gitee 仓库管理")
+        dialog.geometry("1040x680")
+        dialog.minsize(600, 400)
         dialog.transient(self.root)
         dialog.grab_set()
 
         frame = ttk.Frame(dialog, padding=16)
         frame.pack(fill=tk.BOTH, expand=True)
 
-        # 仓库名
-        ttk.Label(frame, text="仓库名称:").pack(anchor=tk.W)
-        repo_default = os.path.basename(self.current_dir)
-        repo_var = tk.StringVar(value=repo_default)
-        ttk.Entry(frame, textvariable=repo_var).pack(fill=tk.X, pady=(2, 10))
+        # === 状态区 ===
+        status_frame = ttk.LabelFrame(frame, text="连接状态", padding=8)
+        status_frame.pack(fill=tk.X)
 
-        # 用户名
-        ttk.Label(frame, text="Gitee 用户名:").pack(anchor=tk.W)
-        user_var = tk.StringVar()
-        ttk.Entry(frame, textvariable=user_var).pack(fill=tk.X, pady=(2, 10))
+        self._gitee_status = tk.StringVar(value="检查中...")
+        ttk.Label(status_frame, textvariable=self._gitee_status,
+                  font=('Microsoft YaHei UI', 13)).pack(anchor=tk.W)
 
-        # 令牌
-        ttk.Label(frame, text="私人令牌:").pack(anchor=tk.W)
-        token_var = tk.StringVar()
-        ttk.Entry(frame, textvariable=token_var, show='*').pack(fill=tk.X, pady=(2, 10))
+        ttk.Label(status_frame,
+                  text=f"分支: {self.git.get_branch()}",
+                  foreground='#555').pack(anchor=tk.W, pady=(2, 0))
 
-        # 令牌获取说明
-        tip = ttk.LabelFrame(frame, text="📌 如何获取令牌", padding=8)
-        tip.pack(fill=tk.X, pady=5)
-        tip_text = (
-            "1. 浏览器打开：gitee.com/profile/\n"
-            "   personal_access_tokens\n"
-            "2. 点「生成新令牌」\n"
-            "3. 勾选 projects 权限，点提交\n"
-            "4. 复制生成的令牌，粘贴到上面"
-        )
-        ttk.Label(tip, text=tip_text, foreground='#555',
-                  font=('Microsoft YaHei UI', 11)).pack(anchor=tk.W)
+        remote_url = self.git.get_remote_url('origin')
+        if remote_url:
+            ttk.Label(status_frame,
+                      text=f"远程: {remote_url}",
+                      foreground='#555', wraplength=460).pack(anchor=tk.W, pady=(2, 0))
 
-        result_var = tk.StringVar()
+        self._ssh_status_var = tk.StringVar()
+        ttk.Label(status_frame, textvariable=self._ssh_status_var,
+                  foreground='#888').pack(anchor=tk.W, pady=(2, 0))
 
-        def do_upload():
-            repo = repo_var.get().strip()
-            user = user_var.get().strip()
-            token = token_var.get().strip()
-            if not repo or not user or not token:
-                result_var.set("请填写所有字段")
-                return
-            _do_upload(repo, user, token, dialog)
+        # === 没配 remote 时显示输入框 ===
+        self._remote_frame = ttk.LabelFrame(frame, text="远程仓库地址 (SSH)", padding=8)
+        self._remote_url_var = tk.StringVar()
+        self._remote_err_var = tk.StringVar()
 
+        if not remote_url:
+            self._remote_frame.pack(fill=tk.X, pady=(10, 0))
+            ttk.Entry(self._remote_frame,
+                      textvariable=self._remote_url_var).pack(fill=tk.X)
+            ttk.Label(self._remote_frame,
+                      text="示例: git@gitee.com:用户名/仓库名.git",
+                      foreground='#888', font=('', 11)).pack(anchor=tk.W, pady=(2, 0))
+            btnf = ttk.Frame(self._remote_frame)
+            btnf.pack(fill=tk.X, pady=(5, 0))
+
+            def do_set_remote():
+                url = self._remote_url_var.get().strip()
+                if not url:
+                    self._remote_err_var.set("地址不能为空")
+                    return
+                self.git.set_remote(url, 'origin')
+                self._remote_err_var.set("✅ 已设置")
+                self._gitee_refresh(dialog)
+                # 隐藏输入区，显示按钮
+                self._remote_frame.pack_forget()
+                self._gitee_btn_pull.config(state=tk.NORMAL if self._ssh_ok else tk.DISABLED)
+                self._gitee_btn_push.config(state=tk.NORMAL if self._ssh_ok else tk.DISABLED)
+
+            ttk.Button(btnf, text="🔗 设置远程仓库", command=do_set_remote).pack(side=tk.LEFT, padx=(0, 8))
+            ttk.Label(btnf, textvariable=self._remote_err_var,
+                      foreground='green').pack(side=tk.LEFT)
+
+        # === 操作按钮 ===
         btn_frame = ttk.Frame(frame)
-        btn_frame.pack(fill=tk.X, pady=(10, 0))
-        ttk.Button(btn_frame, text="☁️  确认上传", command=do_upload).pack(side=tk.LEFT, padx=(0, 8))
-        ttk.Button(btn_frame, text="取消", command=dialog.destroy).pack(side=tk.LEFT)
-        ttk.Label(btn_frame, textvariable=result_var, foreground='red').pack(side=tk.LEFT, padx=(10, 0))
+        btn_frame.pack(fill=tk.X, pady=(15, 0))
+
+        self._gitee_btn_pull = ttk.Button(btn_frame, text="⬇️  拉取 (Pull)",
+                                          command=lambda: self._gitee_pull(dialog))
+        self._gitee_btn_pull.pack(side=tk.LEFT, padx=(0, 8))
+
+        self._gitee_btn_push = ttk.Button(btn_frame, text="⬆️  推送 (Push)",
+                                          command=lambda: self._gitee_push(dialog))
+        self._gitee_btn_push.pack(side=tk.LEFT, padx=(0, 8))
+
+        ttk.Button(btn_frame, text="🔄 刷新状态",
+                   command=lambda: self._gitee_refresh(dialog)).pack(side=tk.LEFT, padx=(0, 8))
+
+        ttk.Button(btn_frame, text="❌ 关闭", command=dialog.destroy).pack(side=tk.RIGHT)
+
+        self._gitee_result = tk.StringVar()
+        ttk.Label(frame, textvariable=self._gitee_result,
+                  foreground='#E65100', wraplength=460).pack(anchor=tk.W, pady=(8, 0))
+
+        # 检查 SSH 连接
+        self._gitee_refresh(dialog)
 
         dialog.wait_window()
 
-    def _upload_gitee(self):
-        """☁️ 上传到 Gitee 主流程"""
-        if not self._check_repo():
-            return
+    def _gitee_refresh(self, dialog=None):
+        """刷新 Gitee 对话框状态"""
+        self._gitee_status.set("🔍 检查连接...")
 
-        # 1) 检查/获取配置
-        cfg = self._load_gitee_config()
-        username = cfg.get('username', '')
-        token = cfg.get('token', '')
+        # 检查 SSH
+        ok, msg = self._check_ssh_connection()
+        self._ssh_ok = ok
+        if ok:
+            # 提取用户名
+            user = ''
+            for line in msg.splitlines():
+                if 'Welcome' in line or 'Hello' in line:
+                    user = line.strip()
+                    break
+            self._ssh_status_var.set(f"✅ SSH 已连接  {user}")
+            self._gitee_status.set("✅ 已连接到 Gitee")
+        else:
+            self._ssh_status_var.set(f"⚠️  SSH 未连接  ({msg[:40]})")
+            if self.git.has_remote('origin'):
+                self._gitee_status.set("⚠️  已配置远程，但 SSH 未连接")
+            else:
+                self._gitee_status.set("❌ 未配置远程仓库")
 
-        if not username or not token:
-            self._show_gitee_dialog()
-            return  # 对话框内完成后会处理
-
-        # 已有配置 → 直接上传
-        repo_name = os.path.basename(self.current_dir)
-        self._do_upload(repo_name, username, token)
-
-    def _do_upload(self, repo_name, username, token, dialog=None):
-        """执行上传流程"""
-        self._toast("☁️  正在上传到 Gitee...")
+        # 启用/禁用按钮
+        connected = ok and self.git.has_remote('origin')
+        state = tk.NORMAL if connected else tk.DISABLED
         if dialog:
-            # 保存配置
-            self._save_gitee_config(username, token)
+            self._gitee_btn_pull.config(state=state)
+            self._gitee_btn_push.config(state=state)
 
-        # 2) 检查是否需要新建 remote
-        need_push = self.git.has_remote('origin')
+    def _gitee_pull(self, dialog):
+        """执行 git pull"""
+        self._gitee_result.set("⬇️  正在拉取...")
+        dialog.update()
+        # 自动提交暂存区（否则 pull 可能失败）
+        staged = self.git.get_staged_files()
+        if staged:
+            self.git.commit("auto commit before pull")
+        r = self.git.pull()
+        if r and r.returncode == 0:
+            self._gitee_result.set("✅ 拉取成功")
+            self.refresh()
+        else:
+            err = r.stderr.strip() if r else "拉取失败"
+            self._gitee_result.set(f"❌ 拉取失败")
+            messagebox.showerror("拉取失败", err, parent=dialog)
 
-        if not need_push:
-            # 检查 Gitee 上仓库是否存在
-            self._toast("☁️  检查 Gitee 仓库...")
-            ok, data = self._call_gitee_api(
-                'GET', f'/repos/{username}/{repo_name}', token)
-
-            if not ok:
-                # 仓库不存在 → 创建
-                self._toast("☁️  正在创建仓库...")
-                ok, data = self._call_gitee_api('POST', '/user/repos', token, {
-                    'name': repo_name,
-                    'description': f'{repo_name} - Git 助手管理',
-                    'private': False,
-                    'auto_init': False,
-                })
-                if not ok:
-                    msg = f"创建仓库失败: {data}"
-                    self._toast(f"❌ {msg}")
-                    if dialog:
-                        messagebox.showerror("上传失败", msg, parent=dialog)
-                    return
-
-            # 设置 remote
-            url = f'https://{username}:{token}@gitee.com/{username}/{repo_name}.git'
-            self.git.set_remote(url, 'origin')
-
-        # 3) 先提交未提交的修改
+    def _gitee_push(self, dialog):
+        """执行 git push"""
+        self._gitee_result.set("⬆️  正在推送...")
+        dialog.update()
         staged = self.git.get_staged_files()
         if staged:
             self.git.commit("auto commit before push")
-
-        # 4) 推送
-        self._toast("☁️  正在推送代码...")
-        r = self.git.push('master')
+        r = self.git.push()
         if r and r.returncode == 0:
-            self._toast(f"✅ 已上传到 Gitee: {username}/{repo_name}")
-            # 清除 remote URL 中的令牌
-            clean_url = f'https://gitee.com/{username}/{repo_name}.git'
-            self.git.set_remote(clean_url, 'origin')
-            if dialog:
-                messagebox.showinfo("上传成功",
-                    f"✅ 已上传到:\nhttps://gitee.com/{username}/{repo_name}",
-                    parent=dialog)
-                dialog.destroy()
+            self._gitee_result.set("✅ 推送成功")
             self.refresh()
         else:
             err = r.stderr.strip() if r else "推送失败"
-            # 隐藏令牌信息（安全）
-            err = err.replace(token, '***')
-            self._toast("❌ 上传失败")
-            if dialog:
-                messagebox.showerror("上传失败", err, parent=dialog)
-            else:
-                messagebox.showerror("上传失败", err)
+            self._gitee_result.set(f"❌ 推送失败")
+            messagebox.showerror("推送失败", err, parent=dialog)
 
 
 # ──────────────────────────────────────────────
