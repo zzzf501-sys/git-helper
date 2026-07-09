@@ -9,7 +9,10 @@ Git 助手 — 可视化 Git 工具
 """
 
 import os
+import json
 import subprocess
+import urllib.request
+import urllib.parse
 import tkinter as tk
 import tkinter.font as tkfont
 from tkinter import ttk, filedialog, messagebox
@@ -189,6 +192,36 @@ class GitHelper:
         """初始化 Git 仓库（git init）"""
         return self._run(['init'])
 
+    # ── 远程操作 ──
+
+    def has_remote(self, name='origin'):
+        r = self._run(['remote', 'get-url', name])
+        return r is not None and r.returncode == 0
+
+    def get_remote_url(self, name='origin'):
+        r = self._run(['remote', 'get-url', name])
+        return r.stdout.strip() if r and r.returncode == 0 else ''
+
+    def set_remote(self, url, name='origin'):
+        if self.has_remote(name):
+            self._run(['remote', 'set-url', name, url])
+        else:
+            self._run(['remote', 'add', name, url])
+
+    def push(self, branch='master'):
+        """推送代码到远程"""
+        try:
+            return subprocess.run(
+                ['git', '-c', 'core.quotepath=false', 'push', '-u', 'origin', branch],
+                cwd=self.working_dir,
+                capture_output=True,
+                text=True,
+                encoding='utf-8',
+                errors='replace',
+            )
+        except FileNotFoundError:
+            return None
+
 
 # ──────────────────────────────────────────────
 # GUI 应用
@@ -313,6 +346,8 @@ class GitHelperApp:
         ttk.Button(btn_row, text="↩️ 取消暂存", command=self._unstage_all).pack(side=tk.LEFT, padx=(0, 5))
         ttk.Button(btn_row, text="💾 提交", command=self._commit).pack(side=tk.LEFT, padx=(0, 5))
         ttk.Button(btn_row, text="⏪ 恢复到选中版本", command=self._restore).pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Separator(btn_row, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=8, pady=2)
+        ttk.Button(btn_row, text="☁️  上传到 Gitee", command=self._upload_gitee).pack(side=tk.LEFT, padx=(0, 5))
         ttk.Button(btn_row, text="🔄 刷新", command=self.refresh).pack(side=tk.LEFT)
 
         # ========== 状态栏 ==========
@@ -689,6 +724,203 @@ class GitHelperApp:
         else:
             err = r.stderr.strip() if r else "Git 未安装"
             messagebox.showerror("初始化失败", err)
+
+    # ── Gitee 上传 ──
+
+    @staticmethod
+    def _gitee_config_path():
+        return os.path.join(os.path.expanduser('~'), '.git-helper-gitee.json')
+
+    def _load_gitee_config(self):
+        """加载 Gitee 全局配置（用户名 + 令牌）"""
+        path = self._gitee_config_path()
+        if os.path.exists(path):
+            try:
+                with open(path, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+            except Exception:
+                pass
+        return {}
+
+    def _save_gitee_config(self, username, token):
+        path = self._gitee_config_path()
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump({'username': username, 'token': token}, f)
+        # 只有本用户可读写
+        try:
+            import stat
+            os.chmod(path, stat.S_IRUSR | stat.S_IWUSR)
+        except Exception:
+            pass
+
+    def _call_gitee_api(self, method, path, token, data=None):
+        """调用 Gitee API v5，返回 (成功?, 数据或错误消息)"""
+        import urllib.error
+        url = f'https://gitee.com/api/v5{path}'
+        if method == 'GET':
+            url += f'?access_token={token}'
+            req = urllib.request.Request(url)
+        else:
+            url += f'?access_token={token}'
+            body = json.dumps(data).encode('utf-8') if data else b''
+            req = urllib.request.Request(url, data=body, method=method)
+            req.add_header('Content-Type', 'application/json')
+
+        try:
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                return True, json.loads(resp.read().decode('utf-8'))
+        except urllib.error.HTTPError as e:
+            try:
+                err = json.loads(e.read().decode('utf-8'))
+                msg = err.get('message', str(e))
+            except Exception:
+                msg = str(e)
+            return False, msg
+        except Exception as e:
+            return False, str(e)
+
+    def _show_gitee_dialog(self):
+        """弹出 Gitee 配置对话框"""
+        dialog = tk.Toplevel(self.root)
+        dialog.title("上传到 Gitee")
+        dialog.geometry("520x430")
+        dialog.resizable(False, False)
+        dialog.transient(self.root)
+        dialog.grab_set()
+
+        frame = ttk.Frame(dialog, padding=16)
+        frame.pack(fill=tk.BOTH, expand=True)
+
+        # 仓库名
+        ttk.Label(frame, text="仓库名称:").pack(anchor=tk.W)
+        repo_default = os.path.basename(self.current_dir)
+        repo_var = tk.StringVar(value=repo_default)
+        ttk.Entry(frame, textvariable=repo_var).pack(fill=tk.X, pady=(2, 10))
+
+        # 用户名
+        ttk.Label(frame, text="Gitee 用户名:").pack(anchor=tk.W)
+        user_var = tk.StringVar()
+        ttk.Entry(frame, textvariable=user_var).pack(fill=tk.X, pady=(2, 10))
+
+        # 令牌
+        ttk.Label(frame, text="私人令牌:").pack(anchor=tk.W)
+        token_var = tk.StringVar()
+        ttk.Entry(frame, textvariable=token_var, show='*').pack(fill=tk.X, pady=(2, 10))
+
+        # 令牌获取说明
+        tip = ttk.LabelFrame(frame, text="📌 如何获取令牌", padding=8)
+        tip.pack(fill=tk.X, pady=5)
+        tip_text = (
+            "1. 浏览器打开：gitee.com/profile/\n"
+            "   personal_access_tokens\n"
+            "2. 点「生成新令牌」\n"
+            "3. 勾选 projects 权限，点提交\n"
+            "4. 复制生成的令牌，粘贴到上面"
+        )
+        ttk.Label(tip, text=tip_text, foreground='#555',
+                  font=('Microsoft YaHei UI', 11)).pack(anchor=tk.W)
+
+        result_var = tk.StringVar()
+
+        def do_upload():
+            repo = repo_var.get().strip()
+            user = user_var.get().strip()
+            token = token_var.get().strip()
+            if not repo or not user or not token:
+                result_var.set("请填写所有字段")
+                return
+            _do_upload(repo, user, token, dialog)
+
+        btn_frame = ttk.Frame(frame)
+        btn_frame.pack(fill=tk.X, pady=(10, 0))
+        ttk.Button(btn_frame, text="☁️  确认上传", command=do_upload).pack(side=tk.LEFT, padx=(0, 8))
+        ttk.Button(btn_frame, text="取消", command=dialog.destroy).pack(side=tk.LEFT)
+        ttk.Label(btn_frame, textvariable=result_var, foreground='red').pack(side=tk.LEFT, padx=(10, 0))
+
+        dialog.wait_window()
+
+    def _upload_gitee(self):
+        """☁️ 上传到 Gitee 主流程"""
+        if not self._check_repo():
+            return
+
+        # 1) 检查/获取配置
+        cfg = self._load_gitee_config()
+        username = cfg.get('username', '')
+        token = cfg.get('token', '')
+
+        if not username or not token:
+            self._show_gitee_dialog()
+            return  # 对话框内完成后会处理
+
+        # 已有配置 → 直接上传
+        repo_name = os.path.basename(self.current_dir)
+        self._do_upload(repo_name, username, token)
+
+    def _do_upload(self, repo_name, username, token, dialog=None):
+        """执行上传流程"""
+        self._toast("☁️  正在上传到 Gitee...")
+        if dialog:
+            # 保存配置
+            self._save_gitee_config(username, token)
+
+        # 2) 检查是否需要新建 remote
+        need_push = self.git.has_remote('origin')
+
+        if not need_push:
+            # 检查 Gitee 上仓库是否存在
+            self._toast("☁️  检查 Gitee 仓库...")
+            ok, data = self._call_gitee_api(
+                'GET', f'/repos/{username}/{repo_name}', token)
+
+            if not ok:
+                # 仓库不存在 → 创建
+                self._toast("☁️  正在创建仓库...")
+                ok, data = self._call_gitee_api('POST', '/user/repos', token, {
+                    'name': repo_name,
+                    'description': f'{repo_name} - Git 助手管理',
+                    'private': False,
+                    'auto_init': False,
+                })
+                if not ok:
+                    msg = f"创建仓库失败: {data}"
+                    self._toast(f"❌ {msg}")
+                    if dialog:
+                        messagebox.showerror("上传失败", msg, parent=dialog)
+                    return
+
+            # 设置 remote
+            url = f'https://{username}:{token}@gitee.com/{username}/{repo_name}.git'
+            self.git.set_remote(url, 'origin')
+
+        # 3) 先提交未提交的修改
+        staged = self.git.get_staged_files()
+        if staged:
+            self.git.commit("auto commit before push")
+
+        # 4) 推送
+        self._toast("☁️  正在推送代码...")
+        r = self.git.push('master')
+        if r and r.returncode == 0:
+            self._toast(f"✅ 已上传到 Gitee: {username}/{repo_name}")
+            # 清除 remote URL 中的令牌
+            clean_url = f'https://gitee.com/{username}/{repo_name}.git'
+            self.git.set_remote(clean_url, 'origin')
+            if dialog:
+                messagebox.showinfo("上传成功",
+                    f"✅ 已上传到:\nhttps://gitee.com/{username}/{repo_name}",
+                    parent=dialog)
+                dialog.destroy()
+            self.refresh()
+        else:
+            err = r.stderr.strip() if r else "推送失败"
+            # 隐藏令牌信息（安全）
+            err = err.replace(token, '***')
+            self._toast("❌ 上传失败")
+            if dialog:
+                messagebox.showerror("上传失败", err, parent=dialog)
+            else:
+                messagebox.showerror("上传失败", err)
 
 
 # ──────────────────────────────────────────────
