@@ -874,28 +874,51 @@ class GitHelperApp:
 
         dialog.wait_window()
 
+    @staticmethod
+    def _set_color(label, text):
+        """根据文本内容设置颜色"""
+        if text.startswith('✅'):
+            label.config(fg='#2E7D32')  # 绿
+        elif text.startswith('❌'):
+            label.config(fg='#D32F2F')  # 红
+        elif text.startswith('⚠️'):
+            label.config(fg='#E65100')  # 橙
+        elif text.startswith('🔍'):
+            label.config(fg='#1565C0')  # 蓝
+        else:
+            label.config(fg='#333333')
+
     def _gitee_refresh(self, dialog=None):
         """刷新 Gitee 对话框状态"""
         self._gitee_status.set("🔍 检查连接...")
+        self._set_color(self._gitee_status_lbl, "🔍 检查连接...")
 
         # 检查 SSH
         ok, msg = self._check_ssh_connection()
         self._ssh_ok = ok
         if ok:
-            # 提取用户名
             user = ''
             for line in msg.splitlines():
                 if 'Welcome' in line or 'Hello' in line:
                     user = line.strip()
                     break
-            self._ssh_status_var.set(f"✅ SSH 已连接  {user}")
+            text = f"✅ SSH 已连接  {user}"
+            self._ssh_status_var.set(text)
+            self._set_color(self._ssh_status_lbl, text)
             self._gitee_status.set("✅ 已连接到 Gitee")
+            self._set_color(self._gitee_status_lbl, "✅ 已连接到 Gitee")
         else:
-            self._ssh_status_var.set(f"⚠️  SSH 未连接  ({msg[:40]})")
+            text = f"⚠️  SSH 未连接  ({msg[:40]})"
+            self._ssh_status_var.set(text)
+            self._set_color(self._ssh_status_lbl, text)
             if self.git.has_remote('origin'):
-                self._gitee_status.set("⚠️  已配置远程，但 SSH 未连接")
+                t = "⚠️  已配置远程，但 SSH 未连接"
+                self._gitee_status.set(t)
+                self._set_color(self._gitee_status_lbl, t)
             else:
-                self._gitee_status.set("❌ 未配置远程仓库")
+                t = "❌ 未配置远程仓库"
+                self._gitee_status.set(t)
+                self._set_color(self._gitee_status_lbl, t)
 
         # 启用/禁用按钮
         connected = ok and self.git.has_remote('origin')
@@ -907,23 +930,26 @@ class GitHelperApp:
     def _gitee_pull(self, dialog):
         """执行 git pull"""
         self._gitee_result.set("⬇️  正在拉取...")
+        self._set_color(self._gitee_result_lbl, "⬇️  正在拉取...")
         dialog.update()
-        # 自动提交暂存区（否则 pull 可能失败）
         staged = self.git.get_staged_files()
         if staged:
             self.git.commit("auto commit before pull")
         r = self.git.pull()
         if r and r.returncode == 0:
             self._gitee_result.set("✅ 拉取成功")
+            self._set_color(self._gitee_result_lbl, "✅ 拉取成功")
             self.refresh()
         else:
             err = r.stderr.strip() if r else "拉取失败"
-            self._gitee_result.set(f"❌ 拉取失败")
+            self._gitee_result.set("❌ 拉取失败")
+            self._set_color(self._gitee_result_lbl, "❌ 拉取失败")
             messagebox.showerror("拉取失败", err, parent=dialog)
 
     def _gitee_push(self, dialog):
         """执行 git push"""
         self._gitee_result.set("⬆️  正在推送...")
+        self._set_color(self._gitee_result_lbl, "⬆️  正在推送...")
         dialog.update()
         staged = self.git.get_staged_files()
         if staged:
@@ -931,10 +957,12 @@ class GitHelperApp:
         r = self.git.push()
         if r and r.returncode == 0:
             self._gitee_result.set("✅ 推送成功")
+            self._set_color(self._gitee_result_lbl, "✅ 推送成功")
             self.refresh()
         else:
             err = r.stderr.strip() if r else "推送失败"
-            self._gitee_result.set(f"❌ 推送失败")
+            self._gitee_result.set("❌ 推送失败")
+            self._set_color(self._gitee_result_lbl, "❌ 推送失败")
             messagebox.showerror("推送失败", err, parent=dialog)
 
 
