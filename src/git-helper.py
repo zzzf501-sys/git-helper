@@ -323,7 +323,7 @@ class GitHelperApp:
         # ── 工作区（树形目录） ──
         w_frame = ttk.LabelFrame(self.paned, text="📝 工作区", padding=2)
         self.work_tree = ttk.Treeview(w_frame, columns=('status',),
-                                      show='tree', height=16, selectmode='browse')
+                                      show='tree', height=6, selectmode='browse')
         self.work_tree.column('status', width=80, minwidth=60, anchor='center')
         self.work_tree.pack(fill=tk.BOTH, expand=True)
         self._add_scrollbar(w_frame, self.work_tree)
@@ -333,7 +333,7 @@ class GitHelperApp:
         # ── 暂存区 ──
         s_frame = ttk.LabelFrame(self.paned, text="📦 暂存区", padding=2)
         self.stage_tree = ttk.Treeview(s_frame, columns=('file',),
-                                       show='headings', height=16, selectmode='browse')
+                                       show='headings', height=6, selectmode='browse')
         self.stage_tree.heading('file', text='文件')
         self.stage_tree.column('file', width=220, minwidth=120)
         self.stage_tree.pack(fill=tk.BOTH, expand=True)
@@ -344,7 +344,7 @@ class GitHelperApp:
         # ── 已提交 ──
         c_frame = ttk.LabelFrame(self.paned, text="✅ 已提交（历史）", padding=2)
         self.commit_tree = ttk.Treeview(c_frame, columns=('hash', 'message'),
-                                        show='headings', height=16, selectmode='browse')
+                                        show='headings', height=6, selectmode='browse')
         self.commit_tree.heading('hash', text='提交ID')
         self.commit_tree.heading('message', text='提交说明')
         self.commit_tree.column('hash', width=90, minwidth=70)
@@ -353,9 +353,9 @@ class GitHelperApp:
         self._add_scrollbar(c_frame, self.commit_tree)
         self.paned.add(c_frame, weight=1)
 
-        # ========== 底部：操作栏 ==========
+        # ========== 底部：操作栏（锚定在底部） ==========
         bottom = ttk.Frame(self.root, padding=6)
-        bottom.pack(fill=tk.X)
+        bottom.pack(fill=tk.X, side=tk.BOTTOM)
 
         # 提交说明行
         msg_row = ttk.Frame(bottom)
