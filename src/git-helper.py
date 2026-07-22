@@ -836,7 +836,7 @@ class GitHelperApp:
         ssh_row.pack(fill=tk.X)
         ttk.Label(ssh_row, text="🔑 SSH:", font=('', 11)).pack(side=tk.LEFT)
         refs['ssh_status'] = tk.StringVar(value="检查中...")
-        ssh_lbl = ttk.Label(ssh_row, textvariable=refs['ssh_status'],
+        ssh_lbl = tk.Label(ssh_row, textvariable=refs['ssh_status'],
                             font=('Microsoft YaHei UI', 12))
         ssh_lbl.pack(side=tk.LEFT, padx=(6, 0))
         refs['ssh_label'] = ssh_lbl
@@ -849,8 +849,8 @@ class GitHelperApp:
         url_entry = ttk.Entry(url_row, textvariable=refs['url_var'])
         url_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=4)
         refs['url_err'] = tk.StringVar()
-        url_err_lbl = ttk.Label(url_row, textvariable=refs['url_err'],
-                                foreground='green', font=('', 10))
+        url_err_lbl = tk.Label(url_row, textvariable=refs['url_err'],
+                                fg='green', font=('', 10))
         url_err_lbl.pack(side=tk.LEFT)
         refs['url_err_label'] = url_err_lbl
 
@@ -883,8 +883,8 @@ class GitHelperApp:
 
         # ── 结果消息 ──
         refs['result'] = tk.StringVar()
-        refs['result_label'] = ttk.Label(section, textvariable=refs['result'],
-                                         foreground='#E65100', wraplength=480, font=('', 11))
+        refs['result_label'] = tk.Label(section, textvariable=refs['result'],
+                                         fg='#E65100', wraplength=480, font=('', 11))
         refs['result_label'].pack(fill=tk.X, pady=(4, 0))
 
         # ── 更新初始状态 ──
@@ -940,6 +940,21 @@ class GitHelperApp:
         else:
             refs['url_err'].set("❌ 删除失败")
 
+    def _run_git_async(self, refs, action, git_callable):
+        """通用后台执行 git 操作，自动捕获异常并回调"""
+        def _bg():
+            try:
+                r = git_callable()
+                self.root.after(0, lambda: self._show_remote_result(refs, r, action))
+            except Exception as e:
+                err_msg = f"❌ 内部异常: {e}"
+                self.root.after(0, lambda: (
+                    refs['result'].set(err_msg),
+                    self._set_color(refs['result_label'], "❌"),
+                    messagebox.showerror(f"{refs['pname']} 操作异常", str(e))))
+
+        threading.Thread(target=_bg, daemon=True).start()
+
     def _do_pull(self, refs):
         """在后台拉取指定远程"""
         pid = refs['pid']
@@ -949,12 +964,7 @@ class GitHelperApp:
             return
         refs['result'].set(f"⬇️  正在从 {pname} 拉取...")
         self._set_color(refs['result_label'], "⬇️")
-
-        def _bg():
-            r = self.git.pull(remote_name=pid)
-            self.root.after(0, lambda: self._show_remote_result(refs, r, 'pull'))
-
-        threading.Thread(target=_bg, daemon=True).start()
+        self._run_git_async(refs, 'pull', lambda: self.git.pull(remote_name=pid))
 
     def _do_push(self, refs):
         """在后台推送到指定远程"""
@@ -965,12 +975,7 @@ class GitHelperApp:
             return
         refs['result'].set(f"⬆️  正在推送到 {pname}...")
         self._set_color(refs['result_label'], "⬆️")
-
-        def _bg():
-            r = self.git.push(remote_name=pid)
-            self.root.after(0, lambda: self._show_remote_result(refs, r, 'push'))
-
-        threading.Thread(target=_bg, daemon=True).start()
+        self._run_git_async(refs, 'push', lambda: self.git.push(remote_name=pid))
 
     def _do_force_push(self, refs):
         """强制推送到指定远程"""
@@ -986,33 +991,49 @@ class GitHelperApp:
             return
         refs['result'].set(f"💪  正在强制推送到 {pname}...")
         self._set_color(refs['result_label'], "💪")
-
-        def _bg():
-            r = self.git.push(remote_name=pid, force=True)
-            self.root.after(0, lambda: self._show_remote_result(refs, r, 'force_push'))
-
-        threading.Thread(target=_bg, daemon=True).start()
+        self._run_git_async(refs, 'force_push', lambda: self.git.push(remote_name=pid, force=True))
 
     def _show_remote_result(self, refs, result, action):
-        """统一显示 push/pull 结果"""
+        """统一显示 push/pull 结果，所有错误都显示原始 git 输出"""
         pname = refs['pname']
         action_label = '推送' if action in ('push', 'force_push') else '拉取'
 
-        if result is None:
-            refs['result'].set(f"❌ Git 未安装或无法执行")
-            self._set_color(refs['result_label'], "❌")
-            return
-
-        if result.returncode == 0:
+        # ── 成功 ──
+        if result is not None and result.returncode == 0:
             refs['result'].set(f"✅ {action_label}成功 ({pname})")
             self._set_color(refs['result_label'], "✅")
             self.refresh()
             return
 
+        # ── 结果为空（超时 / Git 未安装） ──
+        if result is None:
+            refs['result'].set(f"❌ {action_label}失败 — 命令超时或 Git 未安装")
+            self._set_color(refs['result_label'], "❌")
+            messagebox.showerror(f"{action_label}失败",
+                f"Git 命令执行失败：\n\n"
+                f"1. 命令可能超时（超过 120 秒）\n"
+                f"2. Git 未安装或不在 PATH 中\n"
+                f"3. SSH 连接异常中断")
+            return
+
+        # ── 有错误输出 ──
         err = result.stderr.strip()
         err_lower = err.lower()
 
-        # ── 无共同历史 ──
+        # 截取最关键的几行
+        err_lines = [l.strip() for l in err.splitlines() if l.strip()]
+        err_short = '\n'.join(err_lines[:8])  # 最多显示 8 行
+        if len(err_lines) > 8:
+            err_short += '\n... (还有更多)'
+
+        # 去掉 "remote: " 前缀让错误更清晰
+        import re as _re
+        err_display = _re.sub(r'^remote:\s*', '', err_short, flags=_re.MULTILINE)
+
+        refs['result'].set(f"❌ {action_label}失败: {err_display[:120]}")
+        self._set_color(refs['result_label'], "❌")
+
+        # ── 无共同历史（智能引导） ──
         if 'unrelated histories' in err_lower or 'fetch first' in err_lower:
             if action == 'push':
                 choice = messagebox.askyesnocancel(
@@ -1024,73 +1045,109 @@ class GitHelperApp:
                 if choice is True:
                     refs['result'].set(f"⬇️  正在从 {pname} 拉取...")
                     refs['result_label'].update()
-                    pull_r = self.git.pull(remote_name=refs['pid'],
-                        allow_unrelated='unrelated histories' in err_lower)
-                    if pull_r and pull_r.returncode == 0:
-                        push2 = self.git.push(remote_name=refs['pid'])
-                        if push2 and push2.returncode == 0:
-                            refs['result'].set(f"✅ 推送成功（已自动拉取合并）({pname})")
-                            self._set_color(refs['result_label'], "✅")
-                            self.refresh()
-                        else:
-                            e = push2.stderr.strip() if push2 else "推送失败"
-                            refs['result'].set(f"❌ {e[:200]}")
-                    else:
-                        e = pull_r.stderr.strip() if pull_r else "拉取失败"
-                        refs['result'].set(f"❌ 拉取失败: {e[:150]}")
+                    def _bg_pull_then_push():
+                        try:
+                            pull_r = self.git.pull(remote_name=refs['pid'],
+                                allow_unrelated='unrelated histories' in err_lower)
+                            if pull_r and pull_r.returncode == 0:
+                                push2 = self.git.push(remote_name=refs['pid'])
+                                self.root.after(0, lambda: (
+                                    refs['result'].set(
+                                        "✅ 推送成功（已自动拉取合并）" if push2 and push2.returncode == 0
+                                        else f"❌ 拉取后推送仍失败: {(push2.stderr.strip()[:200] if push2 else '超时')}"),
+                                    self._set_color(refs['result_label'], "✅" if push2 and push2.returncode == 0 else "❌"),
+                                    self.refresh()))
+                            else:
+                                e = pull_r.stderr.strip()[:200] if pull_r else "超时"
+                                self.root.after(0, lambda: (
+                                    refs['result'].set(f"❌ 拉取失败: {e}"),
+                                    self._set_color(refs['result_label'], "❌")))
+                        except Exception as _e:
+                            self.root.after(0, lambda e=_e: (
+                                refs['result'].set(f"❌ 异常: {e}"),
+                                self._set_color(refs['result_label'], "❌")))
+                    threading.Thread(target=_bg_pull_then_push, daemon=True).start()
                 elif choice is False:
-                    force_r = self.git.push(remote_name=refs['pid'], force=True)
-                    if force_r and force_r.returncode == 0:
-                        refs['result'].set(f"✅ 强制推送成功 ({pname})")
-                        self._set_color(refs['result_label'], "✅")
-                        self.refresh()
-                    else:
-                        e = force_r.stderr.strip() if force_r else "推送失败"
-                        refs['result'].set(f"❌ 强制推送失败: {e[:150]}")
+                    def _bg_force():
+                        try:
+                            force_r = self.git.push(remote_name=refs['pid'], force=True)
+                            self.root.after(0, lambda: (
+                                refs['result'].set(
+                                    "✅ 强制推送成功" if force_r and force_r.returncode == 0
+                                    else f"❌ 强制推送失败: {(force_r.stderr.strip()[:200] if force_r else '超时')}"),
+                                self._set_color(refs['result_label'], "✅" if force_r and force_r.returncode == 0 else "❌"),
+                                self.refresh()))
+                        except Exception as _e:
+                            self.root.after(0, lambda e=_e: (
+                                refs['result'].set(f"❌ 异常: {e}"),
+                                self._set_color(refs['result_label'], "❌")))
+                    threading.Thread(target=_bg_force, daemon=True).start()
             else:
                 choice = messagebox.askyesno(
                     f"本地和 {pname} 没有共同历史",
                     "是否允许合并无关历史？")
                 if choice:
-                    r2 = self.git.pull(remote_name=refs['pid'], allow_unrelated=True)
-                    if r2 and r2.returncode == 0:
-                        refs['result'].set(f"✅ 拉取成功（已合并无关历史）({pname})")
-                        self._set_color(refs['result_label'], "✅")
-                        self.refresh()
-                    else:
-                        e = r2.stderr.strip() if r2 else "拉取失败"
-                        refs['result'].set(f"❌ {e[:200]}")
+                    def _bg_pull():
+                        try:
+                            r2 = self.git.pull(remote_name=refs['pid'], allow_unrelated=True)
+                            self.root.after(0, lambda: (
+                                refs['result'].set(
+                                    "✅ 拉取成功（已合并无关历史）" if r2 and r2.returncode == 0
+                                    else f"❌ {(r2.stderr.strip()[:200] if r2 else '超时')}"),
+                                self._set_color(refs['result_label'], "✅" if r2 and r2.returncode == 0 else "❌"),
+                                self.refresh()))
+                        except Exception as _e:
+                            self.root.after(0, lambda e=_e: (
+                                refs['result'].set(f"❌ 异常: {e}"),
+                                self._set_color(refs['result_label'], "❌")))
+                    threading.Thread(target=_bg_pull, daemon=True).start()
+            return
 
         # ── 认证错误 ──
-        elif any(k in err_lower for k in ('auth error', 'access denied',
-                'permission denied', 'could not read')):
-            refs['result'].set(f"❌ 认证失败 ({pname})")
-            self._set_color(refs['result_label'], "❌")
+        if any(k in err_lower for k in ('auth error', 'access denied',
+                'permission denied', 'could not read from remote',
+                'could not read from remote repository')):
             remote_url = self.git.get_remote_url(refs['pid'])
             keys_url = refs['pkeys_url']
-            messagebox.showerror("认证失败",
-                f"{pname} SSH 认证失败，可能原因：\n\n"
-                f"1️⃣  远程地址不正确\n"
+            messagebox.showerror(f"{pname} 认证失败",
+                f"无法连接到 {pname}，以下信息可能帮助你排查：\n\n"
+                f"🔍 实际错误：\n{err_display[:300]}\n\n"
+                f"1️⃣  远程地址是否正确？\n"
                 f"    当前: {remote_url}\n\n"
-                f"2️⃣  SSH 密钥未添加到 {pname}\n"
+                f"2️⃣  SSH 密钥是否已添加到 {pname}\n"
                 f"    去 {keys_url} 检查\n\n"
-                f"3️⃣  密钥未加载到 ssh-agent\n"
-                f"    在终端执行: ssh-add ~/.ssh/id_ed25519")
+                f"3️⃣  密钥是否已加载到 ssh-agent\n"
+                f"    执行: ssh-add ~/.ssh/id_ed25519")
+            return
 
         # ── 网络错误 ──
-        elif any(k in err_lower for k in ('could not resolve host',
-                'connection refused', '连接失败')):
-            refs['result'].set(f"❌ 网络连接失败，请检查网络")
-            self._set_color(refs['result_label'], "❌")
+        if any(k in err_lower for k in ('could not resolve host',
+                'connection refused', '连接失败', 'network is unreachable',
+                'no route to host')):
+            messagebox.showerror("网络错误",
+                f"连接到 {pname} 时出现网络问题：\n\n{err_display[:300]}\n\n"
+                "请检查：\n"
+                "1. 网络连接是否正常\n"
+                "2. VPN 是否需要开启\n"
+                "3. 远程仓库地址是否正确")
+            return
 
         # ── 合并冲突 ──
-        elif 'merge conflict' in err_lower or 'conflict' in err_lower:
-            refs['result'].set(f"❌ 合并冲突，请手动解决")
-            self._set_color(refs['result_label'], "❌")
+        if 'merge conflict' in err_lower or 'conflict' in err_lower:
+            messagebox.showerror("合并冲突",
+                f"拉取时产生合并冲突，需要手动解决：\n\n"
+                "1. 打开冲突文件（Git 会标注冲突位置）\n"
+                "2. 保留需要的代码，删除冲突标记\n"
+                "3. 保存文件\n"
+                "4. 在 Git 助手中「暂存所有」→「提交」\n\n"
+                f"冲突文件：\n{err_display[:300]}")
+            return
 
-        else:
-            refs['result'].set(f"❌ {action_label}失败 ({pname})")
-            self._set_color(refs['result_label'], "❌")
+        # ── 其他未知错误 → 显示 git 原始输出 ──
+        messagebox.showerror(f"{action_label}失败",
+            f"Git 命令执行失败，原始输出：\n\n{err_display[:500]}\n\n"
+            "你可以根据上面的错误信息搜索解决方案，"
+            "或在「远程管理」对话框中检查网络和配置。")
 
     def _refresh_ssh_status(self, refs):
         """在后台线程中刷新 SSH 连接状态（不阻塞 UI）"""
@@ -1223,19 +1280,30 @@ class GitHelperApp:
         self._toast("🔄 正在双推...")
 
         def _bg():
-            results = []
-            for pid, pname, *_ in self._get_platform_names():
-                if self.git.has_remote(pid):
-                    r = self.git.push(remote_name=pid)
-                    if r and r.returncode == 0:
-                        results.append(f"✅ {pname}")
+            try:
+                results = []
+                for pid, pname, *_ in self._get_platform_names():
+                    if self.git.has_remote(pid):
+                        try:
+                            r = self.git.push(remote_name=pid)
+                            if r and r.returncode == 0:
+                                results.append(f"✅ {pname}")
+                            else:
+                                err_info = (r.stderr.strip()[:80] if r is not None
+                                            else "超时/无响应")
+                                results.append(f"❌ {pname}")
+                                self.root.after(0, lambda n=pname, e=err_info:
+                                    messagebox.showerror(f"双推失败 — {n}", e))
+                        except Exception as e:
+                            results.append(f"❌ {pname}")
+                            self.root.after(0, lambda n=pname, e=str(e):
+                                messagebox.showerror(f"双推异常 — {n}", e))
                     else:
-                        err = r.stderr.strip()[:60] if r else "超时"
-                        results.append(f"❌ {pname} ({err})")
-                else:
-                    results.append(f"⏭️ {pname}")
-            self.root.after(0, lambda: self._toast("  |  ".join(results)))
-            self.root.after(0, self.refresh)
+                        results.append(f"⏭️ {pname}")
+                self.root.after(0, lambda: self._toast("  |  ".join(results)))
+                self.root.after(0, self.refresh)
+            except Exception as e:
+                self.root.after(0, lambda: self._toast(f"❌ 双推异常: {e}"))
 
         threading.Thread(target=_bg, daemon=True).start()
 
